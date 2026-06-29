@@ -115,8 +115,9 @@ jobs:
             fi
             cp -f dist/windows-amd64/ZLink.exe release/ZLink-windows-amd64.exe
           elif [ "${{ matrix.platform }}" = "linux" ]; then
-            if wails3 task linux:package; then
-              cp -f bin/*.AppImage bin/*.deb bin/*.rpm bin/*.zst release/ 2>/dev/null || true
+            mkdir -p build && cp icons/icon.png build/appicon.png
+            if wails3 task linux:create:deb; then
+              cp -f bin/*.deb release/ 2>/dev/null || true
             else
               wails3 task linux:build
               cp -f bin/ZLink release/ZLink-linux-amd64
