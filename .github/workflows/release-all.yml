@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Release tag (e.g. 1.11.2)
+        description: Release tag (e.g. 1.11.3)
         required: true
       gitee_repo:
         description: Gitee source URL (no credentials)
