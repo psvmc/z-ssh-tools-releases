@@ -1,0 +1,158 @@
+name: Release All Platforms
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag (e.g. 1.11.2)
+        required: true
+      gitee_repo:
+        description: Gitee source URL (no credentials)
+        required: false
+        default: https://gitee.com/psvmc/z-ssh-tools-wails.git
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            platform: windows
+          - os: ubuntu-24.04
+            platform: linux
+          - os: macos-latest
+            platform: macos
+
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Clone from Gitee
+        env:
+          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
+          GITEE_REPO: ${{ inputs.gitee_repo }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "${GITEE_TOKEN:-}" ]; then
+            echo "::error::Set secret GITEE_TOKEN on this repository (Gitee private token, scope: projects)"
+            exit 1
+          fi
+          REPO_PATH="${GITEE_REPO#https://}"
+          AUTH_URL="https://oauth2:${GITEE_TOKEN}@${REPO_PATH}"
+
+          git config --global http.postBuffer 524288000
+          git config --global http.version HTTP/1.1
+
+          TAG_CANDIDATES=("$RELEASE_TAG")
+          if [[ "$RELEASE_TAG" == v* ]]; then
+            TAG_CANDIDATES+=("${RELEASE_TAG#v}")
+          else
+            TAG_CANDIDATES+=("v${RELEASE_TAG}")
+          fi
+
+          clone_ok=false
+          for TAG in "${TAG_CANDIDATES[@]}"; do
+            for attempt in 1 2 3; do
+              echo "Cloning tag ${TAG} (attempt ${attempt})..."
+              rm -rf repo
+              if git clone --depth 1 --branch "$TAG" "$AUTH_URL" repo; then
+                echo "Cloned tag ${TAG}"
+                clone_ok=true
+                break 2
+              fi
+              sleep $((attempt * 5))
+            done
+          done
+
+          if [ "$clone_ok" != true ]; then
+            echo "::error::Failed to clone tag ${RELEASE_TAG} from Gitee. Push the tag first: git tag ${RELEASE_TAG#v} && git push origin ${RELEASE_TAG#v}"
+            exit 1
+          fi
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25.x"
+          cache-dependency-path: repo/go.sum
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: repo/frontend/package-lock.json
+
+      - name: Install NSIS (Windows)
+        if: matrix.platform == 'windows'
+        shell: pwsh
+        run: choco install nsis -y --no-progress
+
+      - name: Install Linux deps
+        if: matrix.platform == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-4-dev libwebkitgtk-6.0-dev pkg-config build-essential
+
+      - name: Build
+        working-directory: repo
+        shell: bash
+        run: |
+          set -euo pipefail
+          export PATH="$(go env GOPATH)/bin:$PATH"
+          go install github.com/wailsapp/wails/v3/cmd/wails3@latest
+          cd frontend && npm ci && cd ..
+          mkdir -p release
+
+          if [ "${{ matrix.platform }}" = "windows" ]; then
+            if command -v makensis >/dev/null 2>&1; then
+              wails3 task windows:package
+              cp -f dist/*-installer.exe release/ 2>/dev/null || true
+            else
+              echo "NSIS not found, building exe only"
+              wails3 task windows:build
+            fi
+            cp -f dist/windows-amd64/ZLink.exe release/ZLink-windows-amd64.exe
+          elif [ "${{ matrix.platform }}" = "linux" ]; then
+            if wails3 task linux:package; then
+              cp -f bin/*.AppImage bin/*.deb bin/*.rpm bin/*.zst release/ 2>/dev/null || true
+            else
+              wails3 task linux:build
+              cp -f bin/ZLink release/ZLink-linux-amd64
+            fi
+          else
+            wails3 task darwin:package:universal
+            ditto -c -k --keepParent bin/ZLink.app release/ZLink-macos-universal.zip
+          fi
+          ls -la release/
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.platform }}
+          path: repo/release/*
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: List release files
+        run: find dist -type f -ls
+
+      - name: Publish to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.tag }}
+          target_commitish: main
+          name: ZLink ${{ inputs.tag }}
+          generate_release_notes: true
+          files: dist/**
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
