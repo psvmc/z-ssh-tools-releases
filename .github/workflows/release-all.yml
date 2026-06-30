@@ -108,12 +108,6 @@ jobs:
 
           cd frontend && npm ci && cd ..
 
-          echo "Generating Wails bindings..."
-          wails3 generate bindings -f "-tags production" -d bindings_staging -clean=true
-          rm -rf frontend/bindings
-          cp -r bindings_staging frontend/bindings
-          rm -rf bindings_staging
-
           echo "Building embedded frontend assets..."
           rm -rf backend/internal/assets/dist
           PRODUCTION=true npm run build --prefix frontend
@@ -137,7 +131,8 @@ jobs:
           elif [ "${{ matrix.platform }}" = "linux" ]; then
             mkdir -p build && cp icons/icon.png build/appicon.png
             if wails3 task linux:create:deb; then
-              cp -f bin/*.deb release/ 2>/dev/null || true
+              deb="$(ls -1 bin/*.deb 2>/dev/null | head -n 1)"
+              if [ -n "$deb" ]; then cp -f "$deb" release/ZLink.deb; fi
             else
               wails3 task linux:build
               cp -f bin/ZLink release/ZLink-linux-amd64
