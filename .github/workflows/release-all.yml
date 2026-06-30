@@ -121,13 +121,23 @@ jobs:
             cp -f dist/windows-amd64/ZLink.exe release/ZLink-windows-amd64.exe
           elif [ "${{ matrix.platform }}" = "linux" ]; then
             mkdir -p build && cp icons/icon.png build/appicon.png
-            if wails3 task linux:create:deb; then
-              deb="$(ls -1 bin/*.deb 2>/dev/null | head -n 1)"
-              if [ -n "$deb" ]; then cp -f "$deb" release/ZLink.deb; fi
-            else
-              wails3 task linux:build
-              cp -f bin/ZLink release/ZLink-linux-amd64
+            export GOARCH=amd64
+            git config user.name "ZLink Release"
+            git config user.email "release@psvmc.cn"
+            export GIT_COMMITTER_NAME="码客说"
+            export GIT_COMMITTER_EMAIL="release@psvmc.cn"
+
+            wails3 task linux:package:release
+
+            deb="$(ls -1 bin/*.deb 2>/dev/null | head -n 1)"
+            rpm="$(ls -1 bin/*.rpm 2>/dev/null | head -n 1)"
+            if [ -z "$deb" ] || [ -z "$rpm" ]; then
+              echo "::error::Linux deb/rpm package missing (deb=$deb rpm=$rpm)"
+              ls -la bin/ || true
+              exit 1
             fi
+            cp -f "$deb" release/ZLink.deb
+            cp -f "$rpm" release/ZLink.rpm
           else
             wails3 task darwin:package:universal
             ditto -c -k --keepParent bin/ZLink.app release/ZLink-macos-universal.zip
