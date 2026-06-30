@@ -102,7 +102,27 @@ jobs:
           set -euo pipefail
           export PATH="$(go env GOPATH)/bin:$PATH"
           go install github.com/wailsapp/wails/v3/cmd/wails3@latest
+
+          # 嵌入资源不在 git 中；先清 Go 缓存，避免 embed 仍引用旧 dist 文件名
+          go clean -cache
+
           cd frontend && npm ci && cd ..
+
+          echo "Generating Wails bindings..."
+          wails3 generate bindings -f "-tags production" -d bindings_staging -clean=true
+          rm -rf frontend/bindings
+          cp -r bindings_staging frontend/bindings
+          rm -rf bindings_staging
+
+          echo "Building embedded frontend assets..."
+          rm -rf backend/internal/assets/dist
+          PRODUCTION=true npm run build --prefix frontend
+          if [ -z "$(find backend/internal/assets/dist -type f 2>/dev/null | head -n 1)" ]; then
+            echo "::error::backend/internal/assets/dist is empty after frontend build"
+            exit 1
+          fi
+          find backend/internal/assets/dist -type f | head -20
+
           mkdir -p release
 
           if [ "${{ matrix.platform }}" = "windows" ]; then
