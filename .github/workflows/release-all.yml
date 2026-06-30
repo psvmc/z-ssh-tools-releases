@@ -138,6 +138,121 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps:
+      - name: Generate changelog from git tags
+        env:
+          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
+          GITEE_REPO: ${{ inputs.gitee_repo }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          GITEE_TOKEN="$(printf '%s' "${GITEE_TOKEN}" | tr -d '\r\n' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+          if [ -z "${GITEE_TOKEN}" ]; then
+            echo "::error::GITEE_TOKEN is empty."
+            exit 1
+          fi
+          REPO_PATH="${GITEE_REPO#https://}"
+          REPO_PATH="${REPO_PATH#http://}"
+          CLONE_URL="https://${REPO_PATH}"
+
+          git config --global http.postBuffer 524288000
+          git config --global http.version HTTP/1.1
+
+          clone_for_changelog() {
+            GIT_TERMINAL_PROMPT=0 git -c credential.helper= \
+              -c "credential.helper=!f() { echo username=oauth2; echo password=${GITEE_TOKEN}; }; f" \
+              "$@"
+          }
+
+          clone_ok=false
+          last_err=""
+          for attempt in 1 2 3; do
+            echo "Cloning for changelog (attempt ${attempt})..."
+            rm -rf repo
+            set +e
+            err=$(
+              clone_for_changelog -c protocol.version=2 \
+                clone --filter=blob:none --tags --no-checkout "$CLONE_URL" repo 2>&1
+            )
+            code=$?
+            set -e
+            if [ "$code" -eq 0 ]; then
+              echo "Cloned for changelog (partial)"
+              clone_ok=true
+              break
+            fi
+            last_err="$err"
+            echo "$err"
+            sleep $((attempt * 5))
+          done
+
+          if [ "$clone_ok" != true ]; then
+            echo "Partial clone failed, trying full clone..."
+            rm -rf repo
+            set +e
+            err=$(
+              clone_for_changelog clone --tags --no-checkout "$CLONE_URL" repo 2>&1
+            )
+            code=$?
+            set -e
+            if [ "$code" -eq 0 ]; then
+              echo "Cloned for changelog (full)"
+              clone_ok=true
+            else
+              last_err="$err"
+            fi
+          fi
+
+          if [ "$clone_ok" != true ]; then
+            echo "::error::Failed to clone for changelog."
+            if [ -n "$last_err" ]; then
+              echo "::error::Git said: ${last_err}"
+            fi
+            exit 1
+          fi
+
+          cd repo
+
+          resolve_tag() {
+            local tag="$1"
+            for candidate in "$tag" "${tag#v}" "v${tag#v}"; do
+              if git rev-parse "refs/tags/${candidate}" >/dev/null 2>&1; then
+                echo "$candidate"
+                return 0
+              fi
+            done
+            return 1
+          }
+
+          CURRENT_TAG="$(resolve_tag "$RELEASE_TAG")" || {
+            echo "::error::Tag ${RELEASE_TAG} not found on Gitee."
+            exit 1
+          }
+
+          PREV_TAG="$(git tag -l --sort=-version:refname | awk -v cur="$CURRENT_TAG" '$0==cur {getline; print; exit}')"
+          if [ -z "$PREV_TAG" ]; then
+            RANGE="$CURRENT_TAG"
+            HEADER="## 变更 (${CURRENT_TAG})"
+            LOG="- 首个发布版本"
+          else
+            RANGE="${PREV_TAG}..${CURRENT_TAG}"
+            HEADER="## 变更 (${PREV_TAG} → ${CURRENT_TAG})"
+            LOG=$(git log "$RANGE" --pretty=format:"- %s (%h)" --no-merges)
+            if [ -z "$LOG" ]; then
+              LOG="- 无 commit 变更（可能仅有 tag 移动）"
+            fi
+          fi
+
+          {
+            printf '%s\n\n' "$HEADER"
+            printf '%s\n' "$LOG"
+          } > "$GITHUB_WORKSPACE/release-notes.md"
+          echo "Changelog for ${RANGE}:"
+          cat "$GITHUB_WORKSPACE/release-notes.md"
+
+      - name: Verify release notes
+        run: test -s release-notes.md
+
       - name: Download artifacts
         uses: actions/download-artifact@v4
         with:
@@ -153,7 +268,7 @@ jobs:
           tag_name: ${{ inputs.tag }}
           target_commitish: main
           name: ZLink ${{ inputs.tag }}
-          generate_release_notes: true
+          body_path: release-notes.md
           files: dist/**
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
