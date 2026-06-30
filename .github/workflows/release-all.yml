@@ -108,15 +108,6 @@ jobs:
 
           cd frontend && npm ci && cd ..
 
-          echo "Building embedded frontend assets..."
-          rm -rf backend/internal/assets/dist
-          PRODUCTION=true npm run build --prefix frontend
-          if [ -z "$(find backend/internal/assets/dist -type f 2>/dev/null | head -n 1)" ]; then
-            echo "::error::backend/internal/assets/dist is empty after frontend build"
-            exit 1
-          fi
-          find backend/internal/assets/dist -type f | head -20
-
           mkdir -p release
 
           if [ "${{ matrix.platform }}" = "windows" ]; then
