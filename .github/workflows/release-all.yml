@@ -126,6 +126,12 @@ jobs:
               echo "::error::makensis not found in PATH after NSIS install"
               exit 1
             fi
+            if [ ! -f icons/icon.ico ]; then
+              echo "::error::icons/icon.ico not found in repository"
+              exit 1
+            fi
+            mkdir -p build/windows
+            cp -f icons/icon.ico build/windows/icon.ico
             wails3 task windows:package
             installer="$(ls -1 dist/*-installer.exe 2>/dev/null | head -n 1)"
             if [ -z "$installer" ]; then
