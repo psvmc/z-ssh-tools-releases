@@ -87,7 +87,18 @@ jobs:
       - name: Install NSIS (Windows)
         if: matrix.platform == 'windows'
         shell: pwsh
-        run: choco install nsis -y --no-progress
+        run: |
+          choco install nsis -y --no-progress
+          $nsisDir = Join-Path ${env:ProgramFiles(x86)} 'NSIS'
+          if (-not (Test-Path (Join-Path $nsisDir 'makensis.exe'))) {
+            $nsisDir = Join-Path $env:ProgramFiles 'NSIS'
+          }
+          if (-not (Test-Path (Join-Path $nsisDir 'makensis.exe'))) {
+            Write-Error "makensis.exe not found after NSIS install"
+            exit 1
+          }
+          Add-Content -Path $env:GITHUB_PATH -Value $nsisDir
+          & (Join-Path $nsisDir 'makensis.exe') /VERSION
 
       - name: Install Linux deps
         if: matrix.platform == 'linux'
@@ -111,14 +122,18 @@ jobs:
           mkdir -p release
 
           if [ "${{ matrix.platform }}" = "windows" ]; then
-            if command -v makensis >/dev/null 2>&1; then
-              wails3 task windows:package
-              cp -f dist/*-installer.exe release/ 2>/dev/null || true
-            else
-              echo "NSIS not found, building exe only"
-              wails3 task windows:build
+            if ! command -v makensis >/dev/null 2>&1; then
+              echo "::error::makensis not found in PATH after NSIS install"
+              exit 1
             fi
-            cp -f dist/windows-amd64/ZLink.exe release/ZLink-windows-amd64.exe
+            wails3 task windows:package
+            installer="$(ls -1 dist/*-installer.exe 2>/dev/null | head -n 1)"
+            if [ -z "$installer" ]; then
+              echo "::error::NSIS installer not found under dist/"
+              ls -la dist/ || true
+              exit 1
+            fi
+            cp -f "$installer" release/ZLink-amd64-installer.exe
           elif [ "${{ matrix.platform }}" = "linux" ]; then
             mkdir -p build && cp icons/icon.png build/appicon.png
             export GOARCH=amd64
