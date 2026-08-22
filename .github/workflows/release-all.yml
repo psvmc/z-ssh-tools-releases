@@ -160,6 +160,10 @@ jobs:
             cp -f "$deb" release/ZLink.deb
             cp -f "$rpm" release/ZLink.rpm
           else
+            if [ ! -f icons/icon.icns ]; then
+              echo "::error::icons/icon.icns not found in repository"
+              exit 1
+            fi
             wails3 task darwin:package:universal
             ditto -c -k --keepParent bin/ZLink.app release/ZLink-macos-universal.zip
           fi
